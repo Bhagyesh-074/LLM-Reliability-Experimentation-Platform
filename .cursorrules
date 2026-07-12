@@ -1,0 +1,14 @@
+You are building an LLM Reliability & Experimentation Platform.
+
+Source of truth docs are in /docs folder. Always follow:
+- ARCHITECTURE.md for structure
+- SYSTEM_DESIGN.md for component design
+- DATABASE_SCHEMA.md for all models
+- AI_RULES.md for coding standards
+
+Rules:
+- Python 3.11+, fully typed
+- Ruff + Black + MyPy compliant
+- No placeholder code
+- One task at a time
+- Never contradict the docs

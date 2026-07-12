@@ -1,0 +1,22 @@
+[theme]
+# LLM Reliability Platform — Streamlit theme
+# Indigo-on-slate dark palette
+
+base                = "dark"
+primaryColor        = "#6366f1"   # indigo-500
+backgroundColor     = "#0f172a"   # slate-950
+secondaryBackgroundColor = "#1e293b"   # slate-800  (sidebar, cards)
+textColor           = "#f1f5f9"   # slate-100
+font                = "monospace"
+
+[server]
+headless            = true
+enableCORS          = false
+enableXsrfProtection = true
+
+[browser]
+gatherUsageStats    = false
+
+[runner]
+# Re-run on every widget interaction (default); no magic commands needed.
+magicEnabled        = false

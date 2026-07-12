@@ -1,0 +1,52 @@
+# LLM Reliability & Experimentation Platform — Default Configuration
+
+app:
+  name: "LLM Reliability Platform"
+  version: "0.1.0"
+  debug: false
+  environment: "development"
+
+database:
+  url: "sqlite:///./data/platform.db"
+  echo: false
+  pool_pre_ping: true
+
+mlflow:
+  tracking_uri: "./mlruns"
+  experiment_name: "llm-reliability"
+  artifact_location: "./mlartifacts"
+
+logging:
+  level: "INFO"
+  format: "{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{function}:{line} | {message}"
+  rotation: "100 MB"
+  retention: "30 days"
+  log_dir: "./logs"
+  colorize: true
+
+providers:
+  timeout_seconds: 30
+  max_retries: 3
+  retry_backoff_factor: 2.0
+
+benchmarks:
+  default_runs: 5
+  concurrency: 4
+  warmup_runs: 1
+
+evaluation:
+  default_metrics:
+    - "latency_p50"
+    - "latency_p95"
+    - "latency_p99"
+    - "tokens_per_second"
+    - "cost_per_1k_tokens"
+    - "error_rate"
+  latency_threshold_ms: 5000
+  error_rate_threshold: 0.05
+
+dashboard:
+  page_title: "LLM Reliability Platform"
+  page_icon: "⚡"
+  layout: "wide"
+  initial_sidebar_state: "expanded"
