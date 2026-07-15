@@ -63,7 +63,7 @@ _PAGE_MODULES: dict[str, str] = {
     "results":    "dashboard.pages.results",
     "failures":   "dashboard.pages.failures",
     "analytics":  "dashboard.pages.analytics",
-    "settings":   "dashboard.pages.settings_page",
+    "settings":   "dashboard.pages.settings",
 }
 
 

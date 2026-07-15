@@ -24,8 +24,6 @@ from dashboard.mock.data import (
     get_summary_metrics,
 )
 
-st.set_page_config(page_title="Reliability Dashboard", page_icon="\U0001F4CA", layout="wide")
-
 STATUS_COLORS: Dict[str, Tuple[str, str]] = {
     "passed": ("#22c55e", "rgba(34,197,94,0.12)"),
     "failed": ("#ef4444", "rgba(239,68,68,0.12)"),
@@ -295,5 +293,11 @@ def main() -> None:
     render_recent_runs(get_recent_runs())
 
 
-if __name__ == "__main__":
+def render() -> None:
+    """Render the dashboard page."""
+    st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
     main()
+
+
+if __name__ == "__main__":
+    render()
