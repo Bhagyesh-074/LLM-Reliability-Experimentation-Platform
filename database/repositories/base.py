@@ -145,4 +145,3 @@ class BaseRepository(Generic[ModelType]):
     def all(self) -> List[ModelType]:
         """Return every row for this model. Use with care on large tables."""
         return list(self.session.execute(select(self.model)).scalars().all())
-        

@@ -101,7 +101,7 @@ def main() -> None:
     st.write("")
     run_col, _ = st.columns([1, 4])
     with run_col:
-        run_clicked = st.button("▶ Run Evaluation", type="primary", use_container_width=True)
+        run_clicked = st.button("▶ Run Evaluation", type="primary", width="stretch")
 
     if run_clicked:
         with st.container(border=True):

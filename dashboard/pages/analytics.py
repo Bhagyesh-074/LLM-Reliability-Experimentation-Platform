@@ -52,7 +52,7 @@ def render_accuracy_trend_chart() -> None:
         labels={"date": "Date", "accuracy": "Accuracy (%)", "model": "Model"},
     )
     fig.update_layout(**_DARK_LAYOUT)
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
 
 def render_cost_chart() -> None:
@@ -67,7 +67,7 @@ def render_cost_chart() -> None:
         text_auto=".2f",
     )
     fig.update_layout(**_DARK_LAYOUT, showlegend=False)
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
 
 def render_latency_chart() -> None:
@@ -82,7 +82,7 @@ def render_latency_chart() -> None:
         **_DARK_LAYOUT,
     )
     fig.update_layout(title_text="Latency comparison (p50 vs p95, ms)")
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
 
 def render_temperature_scatter() -> None:
@@ -96,7 +96,7 @@ def render_temperature_scatter() -> None:
         labels={"temperature": "Temperature", "accuracy": "Accuracy (%)", "model": "Model"},
     )
     fig.update_layout(**_DARK_LAYOUT)
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
 
 def main() -> None:

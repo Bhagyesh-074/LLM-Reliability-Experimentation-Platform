@@ -21,8 +21,15 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, Field
+from dotenv import load_dotenv
+from pydantic import BaseModel, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Load variables from a .env file (if present) into the process environment
+# before Settings is constructed, so both LLM_PLATFORM__* overrides and
+# plain vars like GEMINI_API_KEY are available. Existing environment
+# variables are NOT overridden by values in .env.
+load_dotenv(override=False)
 
 
 # ---------------------------------------------------------------------------
@@ -159,6 +166,17 @@ class Settings(BaseSettings):
     benchmarks: BenchmarksConfig = Field(default_factory=BenchmarksConfig)
     evaluation: EvaluationConfig = Field(default_factory=EvaluationConfig)
     dashboard: DashboardConfig = Field(default_factory=DashboardConfig)
+
+    # Read directly from the plain `GEMINI_API_KEY` env var (not from
+    # `configs/default.yaml` and not under the `LLM_PLATFORM__` prefix).
+    # SecretStr keeps the value out of repr()/str()/logs; use
+    # `.get_secret_value()` to access the raw key when actually calling
+    # the Gemini API.
+    gemini_api_key: SecretStr | None = Field(
+        default=None,
+        validation_alias="GEMINI_API_KEY",
+        repr=False,
+    )
 
     @classmethod
     def from_yaml(cls, path: Path = _CONFIG_PATH) -> "Settings":

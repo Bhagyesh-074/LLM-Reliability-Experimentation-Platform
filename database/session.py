@@ -24,7 +24,7 @@ from database.base import Base
 
 # All models must be imported so their tables are registered on
 # `Base.metadata` before `create_all()` is called.
-  # noqa: F401  (import for side effects)
+from database import models  # noqa: F401  (import for side effects)
 
 DEFAULT_SQLITE_URL = "sqlite:///./llm_reliability_platform.db"
 
@@ -73,7 +73,6 @@ def init_db() -> None:
     no-op for tables that already exist. Not a substitute for Alembic
     migrations once the schema needs to evolve on existing data.
     """
-    import database.models
     logger.info("Initializing database schema at {}", DATABASE_URL)
     Base.metadata.create_all(bind=engine)
     logger.info("Database schema ready.")

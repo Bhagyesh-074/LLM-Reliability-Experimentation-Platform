@@ -283,11 +283,11 @@ def main() -> None:
     with col_radar:
         st.markdown('<div class="section-title">Dimension Comparison</div>', unsafe_allow_html=True)
         fig_radar = radar_chart(get_radar_data(), title="Top 3 Models — 5 Dimensions")
-        st.plotly_chart(fig_radar, use_container_width=True)
+        st.plotly_chart(fig_radar, width="stretch")
     with col_bar:
         st.markdown('<div class="section-title">Composite Ranking</div>', unsafe_allow_html=True)
         fig_bar = leaderboard_bar_chart(leaderboard_df, title="Composite Score by Model")
-        st.plotly_chart(fig_bar, use_container_width=True)
+        st.plotly_chart(fig_bar, width="stretch")
 
     st.markdown('<div class="section-title">Recent Evaluation Runs</div>', unsafe_allow_html=True)
     render_recent_runs(get_recent_runs())
