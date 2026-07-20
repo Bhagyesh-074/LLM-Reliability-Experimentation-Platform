@@ -94,15 +94,12 @@ class OllamaProvider(BaseLLMProvider):
 
         result, elapsed_ms = self._time_call(_call)
 
-        message = result.get("message", {}) if isinstance(result, dict) else {}
-        if isinstance(message, dict):
-            text = message.get("content", "")
-        else:  # pragma: no cover - defensive, SDK objects expose attributes
-            text = getattr(message, "content", "")
+        message = self._field(result, "message", {})
+        text = self._field(message, "content", "") or ""
 
-        prompt_tokens = result.get("prompt_eval_count", 0) if isinstance(result, dict) else 0
-        completion_tokens = result.get("eval_count", 0) if isinstance(result, dict) else 0
-        done = result.get("done", True) if isinstance(result, dict) else True
+        prompt_tokens = self._field(result, "prompt_eval_count", 0) or 0
+        completion_tokens = self._field(result, "eval_count", 0) or 0
+        done = self._field(result, "done", True)
 
         return LLMResponse(
             text=text,
@@ -113,5 +110,52 @@ class OllamaProvider(BaseLLMProvider):
                 "total_tokens": prompt_tokens + completion_tokens,
             },
             finish_reason="stop" if done else "length",
-            raw_metadata=dict(result) if isinstance(result, dict) else {"raw": str(result)},
+            raw_metadata=self._to_raw_metadata(result),
         )
+
+    @staticmethod
+    def _field(obj: Any, key: str, default: Any = None) -> Any:
+        """Read ``key`` off ``obj``, whether it's a plain dict or a typed SDK object.
+
+        Newer versions of the ``ollama`` package return typed response
+        objects (e.g. pydantic models) rather than plain dicts, so a bare
+        ``.get()`` call silently short-circuited to ``default`` for every
+        field on those objects. This checks both shapes explicitly instead
+        of assuming one.
+
+        Args:
+            obj: A dict-like or attribute-bearing object (or ``None``).
+            key: The field name to read.
+            default: Value to return if ``obj`` is ``None`` or lacks ``key``.
+
+        Returns:
+            The field's value, or ``default``.
+        """
+        if obj is None:
+            return default
+        if isinstance(obj, dict):
+            return obj.get(key, default)
+        return getattr(obj, key, default)
+
+    @staticmethod
+    def _to_raw_metadata(result: Any) -> dict[str, Any]:
+        """Normalize the raw Ollama result into a plain dict for ``raw_metadata``.
+
+        Args:
+            result: The raw object returned by the Ollama client, either a
+                dict (older client versions) or a typed SDK object (newer
+                versions, which usually expose ``model_dump()``).
+
+        Returns:
+            A plain ``dict`` snapshot of the result, falling back to a
+            string representation if no structured form is available.
+        """
+        if isinstance(result, dict):
+            return dict(result)
+        model_dump = getattr(result, "model_dump", None)
+        if callable(model_dump):
+            try:
+                return model_dump()
+            except Exception:  # noqa: BLE001 - metadata is best-effort only
+                pass
+        return {"raw": str(result)}

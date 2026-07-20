@@ -1,0 +1,7 @@
+question,context,ground_truth,category,domain,difficulty
+What is the normal resting heart rate for an adult?,General adult vital sign reference ranges.,60 to 100 beats per minute,Medical,Medical,easy
+Which organ produces insulin?,Basic human endocrine anatomy and physiology.,The pancreas produces insulin.,Medical,Medical,easy
+What is the first-line treatment for anaphylaxis?,Emergency management of severe allergic reactions.,Intramuscular epinephrine is the first-line treatment for anaphylaxis.,Medical,Medical,medium
+What is the Glasgow Coma Scale used for?,Neurological assessment tools used in trauma and critical care.,It is used to assess a patient's level of consciousness after a brain injury.,Medical,Medical,medium
+List three symptoms of type 2 diabetes.,Common clinical presentation of type 2 diabetes mellitus.,"Common symptoms include increased thirst, frequent urination, and fatigue.",Medical,Medical,hard
+What is the mechanism of action of beta blockers?,"Cardiovascular pharmacology, focused on adrenergic receptor antagonists.","Beta blockers block beta-adrenergic receptors, reducing heart rate and blood pressure.",Medical,Medical,hard

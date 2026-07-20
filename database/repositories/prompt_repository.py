@@ -83,3 +83,14 @@ class PromptRepository(BaseRepository[Prompt]):
             PromptVersion.version == version,
         )
         return self.session.execute(stmt).scalars().first()
+
+    def get_version_by_id(self, version_id: str) -> Optional[PromptVersion]:
+        """Look up a prompt version directly by its own primary key.
+
+        Unlike :meth:`get_version`, this does not require knowing the
+        parent ``prompt_id`` up front -- callers that only hold a
+        ``PromptVersion.version_id`` (e.g. ``EvaluationConfig.prompt_version_id``)
+        can resolve it in one query.
+        """
+        stmt = select(PromptVersion).where(PromptVersion.version_id == version_id)
+        return self.session.execute(stmt).scalars().first()

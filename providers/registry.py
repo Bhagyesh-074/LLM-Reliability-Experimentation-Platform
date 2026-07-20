@@ -21,6 +21,17 @@ _STATIC_PROVIDERS: Dict[str, Dict[str, Any]] = {
     "gemini": {"requires_api_key": True, "env_var": "GEMINI_API_KEY"},
 }
 
+#: Static per-provider model catalog. Cloud providers expose a curated,
+#: hardcoded list; the "ollama" entry is intentionally empty because its
+#: models are discovered at runtime from the local daemon via
+#: ``detect_ollama_models`` (see ``get_models``).
+PROVIDER_MODELS: Dict[str, List[str]] = {
+    "openai": ["gpt-4o", "gpt-4o-mini", "gpt-3.5-turbo"],
+    "anthropic": ["claude-sonnet-4-6", "claude-haiku-4-5"],
+    "gemini": ["gemini-2.0-flash", "gemini-1.5-pro"],
+    "ollama": [],  # populated dynamically via detect_ollama_models()
+}
+
 
 class ProviderRegistry:
     """Reports which providers are known/configured at runtime.
@@ -52,6 +63,29 @@ class ProviderRegistry:
                 }
             )
         return providers
+
+    @staticmethod
+    def get_models(provider_name: str) -> List[str]:
+        """Return the available model identifiers for a given provider.
+
+        For cloud providers, this is the curated list in
+        ``PROVIDER_MODELS``. For ``"ollama"``, the catalog is dynamic: the
+        locally installed models are discovered at call time via
+        ``detect_ollama_models`` (falling back to an empty list if the
+        daemon or package is unavailable).
+
+        Args:
+            provider_name: A provider key, e.g. ``"openai"`` or
+                ``"ollama"``. Comparison is case-insensitive.
+
+        Returns:
+            A list of model tag strings. Empty if the provider is unknown,
+            or if it is Ollama and no local models are available.
+        """
+        key = provider_name.lower()
+        if key == "ollama":
+            return ProviderRegistry.detect_ollama_models()
+        return list(PROVIDER_MODELS.get(key, []))
 
     @staticmethod
     def detect_ollama_models() -> List[str]:

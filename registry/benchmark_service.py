@@ -29,7 +29,7 @@ from __future__ import annotations
 import hashlib
 import io
 from pathlib import Path
-from typing import Any, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 from loguru import logger
@@ -314,6 +314,32 @@ class BenchmarkService:
                 f"No stored file found for dataset_version_id={dataset_version_id!r} at {path}"
             )
         return pd.read_csv(path, nrows=rows)
+
+    def load_dataset_rows(self, dataset_version_id: str) -> List[Dict[str, Any]]:
+        """
+        Load every row of a dataset version's stored CSV as plain dicts.
+
+        Added for the Evaluation Orchestrator: unlike ``preview_dataset``
+        (bounded, for display purposes), this loads the complete dataset,
+        since an evaluation run needs every question row, not a sample.
+
+        Args:
+            dataset_version_id: The dataset version's primary key.
+
+        Returns:
+            One ``dict`` per row (column name -> value), in file order.
+
+        Raises:
+            FileNotFoundError: If no file is stored for this
+                ``dataset_version_id``.
+        """
+        path = self._dataset_path(dataset_version_id)
+        if not path.exists():
+            raise FileNotFoundError(
+                f"No stored file found for dataset_version_id={dataset_version_id!r} at {path}"
+            )
+        df = pd.read_csv(path)
+        return df.to_dict(orient="records")
 
     # ------------------------------------------------------------------
     # Helpers

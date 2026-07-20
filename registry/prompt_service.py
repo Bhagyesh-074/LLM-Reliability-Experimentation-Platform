@@ -272,6 +272,24 @@ class PromptService:
             PromptVersionResponse.model_validate(v) for v in reversed(versions)
         ]
 
+    def get_version_by_id(self, version_id: str) -> PromptVersionResponse:
+        """Look up a single immutable prompt version directly by its primary key.
+
+        Added for the Evaluation Orchestrator, which only stores a bare
+        ``PromptVersion.version_id`` in ``EvaluationConfig`` (not the
+        parent ``prompt_id``), so ``get_prompt``/``get_version_history``
+        can't be used to resolve it.
+
+        Raises:
+            PromptNotFoundError: if no version exists with this id.
+        """
+        version = self.repo.get_version_by_id(version_id)
+        if version is None:
+            raise PromptNotFoundError(
+                f"No prompt version found with id '{version_id}'."
+            )
+        return PromptVersionResponse.model_validate(version)
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
