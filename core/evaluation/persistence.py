@@ -27,7 +27,7 @@ from database.models import Provider
 from database.repositories.evaluation_repository import EvaluationRepository
 
 if TYPE_CHECKING:  # avoid a runtime import cycle with the orchestrator
-    from core.evaluation.orchestrator import EvaluationRowResult, EvaluationRun
+    from core.evaluation.orchestrator import EvaluationRowResult, EvaluationRun, FailureRecord
 
 logger = logging.getLogger(__name__)
 
@@ -120,13 +120,19 @@ class EvaluationPersistenceService:
         ``_score_row`` -- so the Results dashboard can render per-question
         breakdowns without recomputing anything.
 
+        Any failures the orchestrator detected for a row (via
+        ``_detect_failures``) are persisted right after that row, via
+        ``save_failures``, using the just-created ``result_id`` -- so each
+        ``FailureAnalysis`` row is correctly linked to its
+        ``EvaluationResult`` even though both are created in the same pass.
+
         Args:
             run_id: The persisted parent run id.
             results: The orchestrator's per-row results, in row order.
         """
         for result in results:
             response = result.response
-            self.repository.add_result(
+            saved_result = self.repository.add_result(
                 run_id=run_id,
                 question_id=self._row_str(result.question_row, "question_id"),
                 question=self._row_str(result.question_row, "question"),
@@ -141,7 +147,36 @@ class EvaluationPersistenceService:
                 composite_score=result.composite_score if result.success else None,
                 status=self._row_status(result),
             )
+            if result.failures:
+                self.save_failures(saved_result.result_id, result.failures)
         logger.info("Persisted %d result row(s) for run %s", len(results), run_id)
+
+    def save_failures(self, result_id: str, failures: List["FailureRecord"]) -> None:
+        """Persist one ``FailureAnalysis`` row per detected failure record.
+
+        A single evaluation row can trigger more than one failure rule at
+        once (e.g. both low accuracy and low hallucination-resistance), so
+        each entry in ``failures`` becomes its own ``FailureAnalysis`` row,
+        all pointing at the same ``result_id``. Called from
+        ``save_results`` right after the owning ``EvaluationResult`` row is
+        created; it can also be called directly (e.g. by tests, or by a
+        future re-analysis job) given any existing ``result_id``.
+
+        Args:
+            result_id: The persisted ``EvaluationResult.result_id`` these
+                failure classifications belong to.
+            failures: The failure records detected for this row, e.g. by
+                ``EvaluationOrchestrator._detect_failures``.
+        """
+        for failure in failures:
+            self.repository.add_failure(
+                result_id=result_id,
+                category=failure.category,
+                severity=failure.severity,
+                explanation=failure.explanation,
+            )
+        if failures:
+            logger.info("Persisted %d failure record(s) for result %s", len(failures), result_id)
 
     def save_metrics(self, run_id: str, metric_averages: Dict[str, float]) -> None:
         """Persist the 1:1 aggregate ``RunMetrics`` row for a run.
