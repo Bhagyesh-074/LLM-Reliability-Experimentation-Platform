@@ -5,9 +5,16 @@ from __future__ import annotations
 from typing import Any, Optional, Sequence, Tuple
 
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
-from database.models import EvaluationResult, EvaluationRun, FailureAnalysis, RunMetrics
+from database.models import (
+    DatasetVersion,
+    EvaluationResult,
+    EvaluationRun,
+    FailureAnalysis,
+    PromptVersion,
+    RunMetrics,
+)
 from database.repositories.base import BaseRepository
 
 
@@ -59,6 +66,50 @@ class EvaluationRepository(BaseRepository[EvaluationRun]):
         self.session.add(failure)
         self.session.flush()
         return failure
+
+    def list_runs(self, limit: Optional[int] = None) -> Sequence[EvaluationRun]:
+        """Return evaluation runs ordered most-recent-first (by ``started_at``).
+
+        Runs with a ``NULL`` ``started_at`` sort last. Used to populate the
+        Results page's run selector, whose default selection is the first
+        (most recent) entry.
+
+        Args:
+            limit: Optional cap on the number of runs returned. ``None``
+                (the default) returns every run.
+        """
+        stmt = select(EvaluationRun).order_by(EvaluationRun.started_at.desc().nulls_last())
+        if limit is not None:
+            stmt = stmt.limit(limit)
+        return self.session.execute(stmt).scalars().all()
+
+    def get_run_with_relations(self, run_id: str) -> Optional[EvaluationRun]:
+        """Fetch one run eagerly loaded with the relations its detail view needs.
+
+        Eager-loads ``provider``, ``prompt_version`` (and its parent
+        ``prompt``), and ``dataset_version`` (and its parent ``benchmark``)
+        in a single query, so the Results page's run-header panel can read
+        provider/prompt/benchmark names without triggering per-attribute
+        lazy loads after the session that produced this row may have moved
+        on to other queries.
+
+        Args:
+            run_id: Primary key of the run to fetch.
+
+        Returns:
+            The matching ``EvaluationRun``, or ``None`` if ``run_id`` does
+            not exist.
+        """
+        stmt = (
+            select(EvaluationRun)
+            .options(
+                joinedload(EvaluationRun.provider),
+                joinedload(EvaluationRun.prompt_version).joinedload(PromptVersion.prompt),
+                joinedload(EvaluationRun.dataset_version).joinedload(DatasetVersion.benchmark),
+            )
+            .where(EvaluationRun.run_id == run_id)
+        )
+        return self.session.execute(stmt).unique().scalar_one_or_none()
 
     def list_by_model(self, model_name: str) -> Sequence[EvaluationRun]:
         """Return all runs for a given model name (indexed lookup)."""

@@ -250,7 +250,10 @@ class EvaluationResult(Base):
     """One evaluated question/response pair belonging to an evaluation run."""
 
     __tablename__ = "evaluation_results"
-    __table_args__ = (Index("ix_evaluation_results_run_id", "run_id"),)
+    __table_args__ = (
+        Index("ix_evaluation_results_run_id", "run_id"),
+        Index("ix_evaluation_results_status", "status"),
+    )
 
     result_id: Mapped[str] = mapped_column(
         String(36), primary_key=True, default=_uuid
@@ -264,6 +267,14 @@ class EvaluationResult(Base):
     response: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     latency_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     token_usage: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    accuracy_score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    hallucination_score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    instruction_score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    safety_score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    composite_score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    status: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True, doc="'passed' or 'failed', derived from row success at persist time."
+    )
 
     run: Mapped["EvaluationRun"] = relationship(back_populates="results")
     failures: Mapped[List["FailureAnalysis"]] = relationship(

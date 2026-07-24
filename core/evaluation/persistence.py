@@ -41,6 +41,14 @@ _METRIC_COLUMNS: tuple[str, ...] = (
     "cost",
 )
 
+#: Per-row ``metric_scores`` keys that have a matching per-question column on
+#: ``EvaluationResult`` (``"<key>_score"``). ``latency`` and ``cost`` are
+#: intentionally excluded: they aren't persisted per row on
+#: ``EvaluationResult`` (latency/token usage are already captured via
+#: ``latency_ms`` / ``token_usage`` from the raw response), only as run-level
+#: averages on ``RunMetrics``.
+_ROW_SCORE_KEYS: tuple[str, ...] = ("accuracy", "hallucination", "instruction", "safety")
+
 
 class EvaluationPersistenceService:
     """Persists an ``EvaluationRun`` DTO and its children to the database.
@@ -101,8 +109,16 @@ class EvaluationPersistenceService:
         """Persist every per-row result belonging to a run.
 
         Both successful and failed rows are persisted so the run's history
-        is complete. For failed rows, ``response`` / latency / tokens may
-        be absent and are stored as ``None``.
+        is complete. For failed rows, ``response`` / latency / tokens / the
+        per-question scores are absent and stored as ``None``, and
+        ``status`` is recorded as ``"failed"``.
+
+        Per-question scores (``accuracy_score``, ``hallucination_score``,
+        ``instruction_score``, ``safety_score``, ``composite_score``) are
+        read directly off each row's ``metric_scores`` / ``composite_score``
+        -- the same values the orchestrator already computed via
+        ``_score_row`` -- so the Results dashboard can render per-question
+        breakdowns without recomputing anything.
 
         Args:
             run_id: The persisted parent run id.
@@ -118,6 +134,12 @@ class EvaluationPersistenceService:
                 response=response.text if response is not None else None,
                 latency_ms=self._latency_int(response),
                 token_usage=self._total_tokens(response),
+                accuracy_score=self._row_score(result, "accuracy"),
+                hallucination_score=self._row_score(result, "hallucination"),
+                instruction_score=self._row_score(result, "instruction"),
+                safety_score=self._row_score(result, "safety"),
+                composite_score=result.composite_score if result.success else None,
+                status=self._row_status(result),
             )
         logger.info("Persisted %d result row(s) for run %s", len(results), run_id)
 
@@ -166,6 +188,33 @@ class EvaluationPersistenceService:
         self.session.flush()
         logger.info("Registered new provider %r (id=%s, type=%s)", provider_name, provider.provider_id, provider_type)
         return provider.provider_id
+
+    @staticmethod
+    def _row_score(result: "EvaluationRowResult", key: str) -> Optional[float]:
+        """Read one component score off a row's ``metric_scores``, or ``None``.
+
+        Returns ``None`` for failed rows (``metric_scores`` is empty on
+        failure, per ``EvaluationRowResult``) and for successful rows where
+        that particular scorer key is absent for any reason.
+
+        Args:
+            result: The orchestrator's per-row result.
+            key: One of ``_ROW_SCORE_KEYS`` (e.g. ``"accuracy"``).
+        """
+        if not result.success:
+            return None
+        return result.metric_scores.get(key)
+
+    @staticmethod
+    def _row_status(result: "EvaluationRowResult") -> str:
+        """Derive the persisted per-row ``status`` from the row's outcome.
+
+        Mirrors ``EvaluationRowResult.success``: ``"passed"`` for a row that
+        completed generation and scoring without error, ``"failed"``
+        otherwise (missing template variable, provider error, or scoring
+        error -- all of which set ``success=False``).
+        """
+        return "passed" if result.success else "failed"
 
     @staticmethod
     def _row_str(row: Dict[str, Any], key: str) -> Optional[str]:

@@ -20,7 +20,7 @@ from providers.base import (
 logger = logging.getLogger(__name__)
 
 try:
-    import google.generativeai as genai
+    import google.genai as genai
     from google.api_core import exceptions as google_exceptions
 except ImportError:  # pragma: no cover - exercised only when package is missing
     genai = None  # type: ignore[assignment]
