@@ -2,27 +2,24 @@
 
 Displays top-level KPI cards, the model leaderboard, a radar comparison
 chart, recent evaluation runs, and a regression alert banner. All data is
-sourced exclusively from `dashboard.mock.data` — there are no backend or
-network calls on this page.
+sourced from the application database via `session_scope()` — there are
+no mock data calls on this page.
 """
 from __future__ import annotations
 
 import html
-from typing import Dict, Tuple
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 import streamlit as st
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session
 
+from database.models import EvaluationRun, Provider, RunMetrics
+from database.repositories.evaluation_repository import EvaluationRepository
+from database.session import session_scope
 from dashboard.components.charts import leaderboard_bar_chart, radar_chart
-from dashboard.mock.data import (
-    RegressionAlert,
-    SummaryMetrics,
-    get_leaderboard,
-    get_radar_data,
-    get_recent_runs,
-    get_regression_alert,
-    get_summary_metrics,
-)
 
 STATUS_COLORS: Dict[str, Tuple[str, str]] = {
     "passed": ("#22c55e", "rgba(34,197,94,0.12)"),
@@ -141,9 +138,340 @@ table.custom-table tr:hover td { background: #16203a; }
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 
 
+# --------------------------------------------------------------------------
+# Data transfer objects
+# --------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class SummaryMetrics:
+    """Top-level KPI values shown in the Overview cards."""
+
+    total_runs: int
+    avg_accuracy: float
+    best_model: str
+    active_providers: int
+
+
+@dataclass(frozen=True)
+class RegressionAlert:
+    """Result of comparing each model's latest run against its previous one."""
+
+    detected: bool
+    model_name: Optional[str] = None
+    metric: Optional[str] = None
+    message: Optional[str] = None
+
+
+# --------------------------------------------------------------------------
+# Data access — all queries go through session_scope()
+# --------------------------------------------------------------------------
+
+
+def _count_total_runs(session: Session) -> int:
+    """Return the total number of evaluation runs."""
+    return session.execute(select(func.count(EvaluationRun.run_id))).scalar_one()
+
+
+def _avg_accuracy(session: Session) -> Optional[float]:
+    """Return the mean ``RunMetrics.accuracy`` across all runs, or ``None`` if unset."""
+    return session.execute(select(func.avg(RunMetrics.accuracy))).scalar_one()
+
+
+def _best_model_by_avg_composite(session: Session) -> Optional[str]:
+    """Return the model_name with the highest average composite_score."""
+    stmt = (
+        select(EvaluationRun.model_name, func.avg(EvaluationRun.composite_score).label("avg_score"))
+        .where(EvaluationRun.model_name.is_not(None))
+        .where(EvaluationRun.composite_score.is_not(None))
+        .group_by(EvaluationRun.model_name)
+        .order_by(func.avg(EvaluationRun.composite_score).desc())
+        .limit(1)
+    )
+    row = session.execute(stmt).first()
+    return row[0] if row is not None else None
+
+
+def _count_active_providers(session: Session) -> int:
+    """Return the number of distinct providers that have been used in a run."""
+    return session.execute(
+        select(func.count(func.distinct(EvaluationRun.provider_id)))
+    ).scalar_one()
+
+
+def get_summary_metrics() -> SummaryMetrics:
+    """Fetch the four top-level KPI values for the Overview cards."""
+    with session_scope() as session:
+        total_runs = _count_total_runs(session)
+        avg_accuracy = _avg_accuracy(session)
+        best_model = _best_model_by_avg_composite(session)
+        active_providers = _count_active_providers(session)
+
+    return SummaryMetrics(
+        total_runs=total_runs,
+        avg_accuracy=round(float(avg_accuracy), 1) if avg_accuracy is not None else 0.0,
+        best_model=best_model or "—",
+        active_providers=active_providers,
+    )
+
+
+def get_leaderboard() -> pd.DataFrame:
+    """Fetch one aggregated row per model for the leaderboard and bar chart.
+
+    Each model is represented once, averaging its composite score and
+    per-dimension metrics across every run it has, and counting how many
+    runs contributed. The model's provider is taken from its most recent
+    run. Columns: ``model_name``, ``provider``, ``accuracy``,
+    ``hallucination``, ``instruction``, ``safety``, ``composite``,
+    ``runs_count``. Sorted by ``composite`` descending.
+    """
+    with session_scope() as session:
+        agg_stmt = (
+            select(
+                EvaluationRun.model_name,
+                func.avg(EvaluationRun.composite_score).label("composite"),
+                func.count(EvaluationRun.run_id).label("runs_count"),
+            )
+            .where(EvaluationRun.model_name.is_not(None))
+            .group_by(EvaluationRun.model_name)
+        )
+        agg_rows = session.execute(agg_stmt).all()
+
+        latest_run_subq = (
+            select(
+                EvaluationRun.model_name.label("model_name"),
+                func.max(EvaluationRun.started_at).label("max_started"),
+            )
+            .where(EvaluationRun.model_name.is_not(None))
+            .group_by(EvaluationRun.model_name)
+            .subquery()
+        )
+        latest_provider_stmt = (
+            select(EvaluationRun.model_name, Provider.name)
+            .join(Provider, Provider.provider_id == EvaluationRun.provider_id)
+            .join(
+                latest_run_subq,
+                (EvaluationRun.model_name == latest_run_subq.c.model_name)
+                & (EvaluationRun.started_at == latest_run_subq.c.max_started),
+            )
+        )
+        provider_by_model: Dict[str, str] = dict(session.execute(latest_provider_stmt).all())
+
+        dim_stmt = (
+            select(
+                EvaluationRun.model_name,
+                func.avg(RunMetrics.accuracy).label("accuracy"),
+                func.avg(RunMetrics.hallucination).label("hallucination"),
+                func.avg(RunMetrics.instruction).label("instruction"),
+                func.avg(RunMetrics.safety).label("safety"),
+            )
+            .join(RunMetrics, RunMetrics.run_id == EvaluationRun.run_id)
+            .where(EvaluationRun.model_name.is_not(None))
+            .group_by(EvaluationRun.model_name)
+        )
+        dim_by_model = {row.model_name: row for row in session.execute(dim_stmt).all()}
+
+    records = []
+    for row in agg_rows:
+        model_name = row.model_name
+        dims = dim_by_model.get(model_name)
+        records.append(
+            {
+                "model_name": model_name,
+                "provider": provider_by_model.get(model_name, "Unknown"),
+                "accuracy": float(dims.accuracy) if dims and dims.accuracy is not None else 0.0,
+                "hallucination": float(dims.hallucination) if dims and dims.hallucination is not None else 0.0,
+                "instruction": float(dims.instruction) if dims and dims.instruction is not None else 0.0,
+                "safety": float(dims.safety) if dims and dims.safety is not None else 0.0,
+                "composite": float(row.composite) if row.composite is not None else 0.0,
+                "runs_count": int(row.runs_count),
+            }
+        )
+
+    df = pd.DataFrame.from_records(
+        records,
+        columns=["model_name", "provider", "accuracy", "hallucination", "instruction", "safety", "composite", "runs_count"],
+    )
+    if df.empty:
+        return df
+    return df.sort_values("composite", ascending=False).reset_index(drop=True)
+
+
+def get_radar_data() -> pd.DataFrame:
+    """Fetch per-dimension scores for the top 3 models by average composite score.
+
+    ROOT CAUSE OF THE "only Hallucination shows" BUG (now fixed here): the
+    previous implementation joined each model to a single specific run
+    (the one with the highest ``composite_score``) and read that ONE
+    run's ``RunMetrics`` row. ``RunMetrics.accuracy``, ``.instruction``,
+    and ``.safety`` are independently nullable, so whenever the run with
+    the top composite score happened to have those columns still NULL
+    (e.g. a judging pass hadn't populated them yet), the ``None -> 0.0``
+    defaulting silently zeroed 3 of the 4 radar axes for that model, even
+    though other runs for the same model had real values for those
+    dimensions.
+
+    Fix: aggregate with SQL ``AVG()`` across *all* of a model's runs, per
+    dimension, independently (the same pattern already used successfully
+    in ``get_leaderboard()``'s ``dim_stmt``). SQL's ``AVG()`` ignores NULL
+    rows per column, so a model's Accuracy average is computed only from
+    the runs that actually recorded accuracy, its Instruction average
+    only from runs that recorded instruction, etc. A dimension now only
+    shows 0 if truly no run for that model ever recorded it.
+
+    Returns a long-format DataFrame with columns ``["model", "dimension",
+    "value"]`` (one row per model+dimension pair), matching what
+    ``dashboard.components.charts.radar_chart`` expects.
+    """
+    with session_scope() as session:
+        # Top 3 models by average composite_score — same ranking basis as
+        # the leaderboard — used to scope which models the radar covers.
+        top_models_stmt = (
+            select(EvaluationRun.model_name)
+            .where(EvaluationRun.model_name.is_not(None))
+            .where(EvaluationRun.composite_score.is_not(None))
+            .group_by(EvaluationRun.model_name)
+            .order_by(func.avg(EvaluationRun.composite_score).desc())
+            .limit(3)
+        )
+        top_models = [row[0] for row in session.execute(top_models_stmt).all()]
+
+        if not top_models:
+            return pd.DataFrame(columns=["model", "dimension", "value"])
+
+        dim_stmt = (
+            select(
+                EvaluationRun.model_name,
+                func.avg(RunMetrics.accuracy).label("accuracy"),
+                func.avg(RunMetrics.hallucination).label("hallucination"),
+                func.avg(RunMetrics.instruction).label("instruction"),
+                func.avg(RunMetrics.safety).label("safety"),
+            )
+            .join(RunMetrics, RunMetrics.run_id == EvaluationRun.run_id)
+            .where(EvaluationRun.model_name.in_(top_models))
+            .group_by(EvaluationRun.model_name)
+        )
+        dim_rows = session.execute(dim_stmt).all()
+
+    records = []
+    for row in dim_rows:
+        records.append(
+            {
+                "model": row.model_name,
+                # Keys below are RunMetrics' actual attribute names
+                # (accuracy, hallucination, instruction, safety) — this is
+                # the single source of truth for DIMENSION_COLUMNS below,
+                # so the melt can never silently drop or miss a column.
+                "accuracy": (float(row.accuracy) if row.accuracy is not None else 0.0) * 100.0,
+                "hallucination": 100.0 - (float(row.hallucination) if row.hallucination is not None else 0.0) * 100.0,
+                "instruction": (float(row.instruction) if row.instruction is not None else 0.0) * 100.0,
+                "safety": (float(row.safety) if row.safety is not None else 0.0) * 100.0,
+            }
+        )
+
+    DIMENSION_COLUMNS = ["accuracy", "hallucination", "instruction", "safety"]
+    wide_df = pd.DataFrame.from_records(records, columns=["model", *DIMENSION_COLUMNS])
+    if wide_df.empty:
+        return pd.DataFrame(columns=["model", "dimension", "value"])
+
+    # radar_chart() expects one row per (model, dimension) pair, so melt
+    # from wide (one column per dimension) to long format. value_vars is
+    # passed explicitly (rather than relying on "melt everything not in
+    # id_vars") so the set of dimensions plotted always matches
+    # DIMENSION_COLUMNS exactly, even if wide_df ever gains extra columns.
+    long_df = wide_df.melt(
+        id_vars="model", value_vars=DIMENSION_COLUMNS, var_name="dimension", value_name="value"
+    )
+    long_df["dimension"] = long_df["dimension"].str.capitalize()
+
+    # Preserve the top_models ranking order for a stable legend/plot order.
+    long_df["model"] = pd.Categorical(long_df["model"], categories=top_models, ordered=True)
+    return long_df.sort_values(["model", "dimension"]).reset_index(drop=True)
+
+
+def get_recent_runs() -> pd.DataFrame:
+    """Fetch the 5 most recent evaluation runs for the Recent Runs table."""
+    with session_scope() as session:
+        repo = EvaluationRepository(session)
+        runs = repo.list_runs(limit=5)
+        records = [
+            {
+                "run_id": run.run_id,
+                "model_name": run.model_name or "Unknown",
+                "started_at": run.started_at,
+                "composite_score": run.composite_score,
+                "status": run.status or "unknown",
+            }
+            for run in runs
+        ]
+
+    return pd.DataFrame.from_records(
+        records, columns=["run_id", "model_name", "started_at", "composite_score", "status"]
+    )
+
+
+def get_regression_alert() -> RegressionAlert:
+    """Detect a composite-score regression by comparing each model's two most recent runs.
+
+    A model has regressed if its latest run's ``composite_score`` dropped
+    by more than 10% relative to its immediately preceding run. When
+    several models have regressed, the one with the largest percentage
+    drop is reported.
+    """
+    with session_scope() as session:
+        stmt = (
+            select(EvaluationRun.model_name, EvaluationRun.composite_score, EvaluationRun.started_at)
+            .where(EvaluationRun.model_name.is_not(None))
+            .where(EvaluationRun.composite_score.is_not(None))
+            .order_by(EvaluationRun.model_name, EvaluationRun.started_at.desc().nulls_last())
+        )
+        rows = session.execute(stmt).all()
+
+    runs_by_model: Dict[str, List[float]] = {}
+    for model_name, composite_score, _started_at in rows:
+        runs_by_model.setdefault(model_name, []).append(float(composite_score))
+
+    worst_drop_pct = 0.0
+    worst_model: Optional[str] = None
+    worst_old: Optional[float] = None
+    worst_new: Optional[float] = None
+
+    for model_name, scores in runs_by_model.items():
+        if len(scores) < 2:
+            continue
+        newest_score, previous_score = scores[0], scores[1]
+        if previous_score <= 0:
+            continue
+        drop_pct = (previous_score - newest_score) / previous_score * 100.0
+        if drop_pct > 10.0 and drop_pct > worst_drop_pct:
+            worst_drop_pct = drop_pct
+            worst_model = model_name
+            worst_old = previous_score
+            worst_new = newest_score
+
+    if worst_model is None:
+        return RegressionAlert(detected=False)
+
+    return RegressionAlert(
+        detected=True,
+        model_name=worst_model,
+        metric="composite_score",
+        message=(
+            f"Regression detected: {worst_model} dropped from "
+            f"{worst_old:.1f} to {worst_new:.1f} ({worst_drop_pct:.0f}% drop)."
+        ),
+    )
+
+
+# --------------------------------------------------------------------------
+# Rendering
+# --------------------------------------------------------------------------
+
+
 def render_regression_alert(alert: RegressionAlert) -> None:
-    """Render a red banner if a regression has been detected."""
+    """Render a red banner if a regression has been detected, else a subtle note."""
     if not alert.detected:
+        st.caption("✅ No regressions detected across the latest evaluation runs.")
         return
     model = html.escape(alert.model_name or "Unknown model")
     metric = html.escape(alert.metric or "Unknown metric")
@@ -165,9 +493,9 @@ def render_regression_alert(alert: RegressionAlert) -> None:
 def render_metric_cards(metrics: SummaryMetrics) -> None:
     """Render the 4 top-level KPI cards."""
     card_defs = [
-        ("Total Runs", f"{metrics.total_runs:,}", "Last 30 days"),
+        ("Total Runs", f"{metrics.total_runs:,}", "All time"),
         ("Avg Accuracy", f"{metrics.avg_accuracy}%", "Across active models"),
-        ("Best Model", metrics.best_model, "By composite score"),
+        ("Best Model", metrics.best_model, "By avg composite score"),
         ("Active Providers", str(metrics.active_providers), "Currently monitored"),
     ]
     cols = st.columns(4)
@@ -185,83 +513,81 @@ def render_metric_cards(metrics: SummaryMetrics) -> None:
             )
 
 
+def _composite_score_style(value: float) -> str:
+    """Return a CSS background/foreground style for a composite score.
+
+    Composite scores are on a 0-1 scale. Thresholds: green above 0.85,
+    yellow above 0.70, red at or below 0.50, neutral otherwise.
+    """
+    if pd.isna(value):
+        return ""
+    if value > 0.85:
+        bg, fg = "rgba(34,197,94,0.35)", "#f0fdf4"
+    elif value > 0.70:
+        bg, fg = "rgba(245,158,11,0.35)", "#fffbeb"
+    elif value <= 0.50:
+        bg, fg = "rgba(239,68,68,0.35)", "#fef2f2"
+    else:
+        bg, fg = "rgba(148,163,184,0.20)", "#e2e8f0"
+    return f"background-color: {bg}; color: {fg}; font-weight: 600;"
+
+
 def render_leaderboard(df: pd.DataFrame) -> None:
-    """Render the model leaderboard as a styled HTML table."""
-    rows_html = ""
-    for i, row in df.iterrows():
-        rank = int(i) + 1
-        badge_cls = "rank-badge top" if rank == 1 else "rank-badge"
-        composite = float(row["composite"])
-        rows_html += f"""
-        <tr>
-            <td><span class="{badge_cls}">{rank}</span></td>
-            <td>{html.escape(str(row['model_name']))}</td>
-            <td>{html.escape(str(row['provider']))}</td>
-            <td>{row['accuracy']:.1f}%</td>
-            <td>{row['hallucination']:.1f}%</td>
-            <td>{row['instruction']:.1f}%</td>
-            <td>{row['safety']:.1f}%</td>
-            <td>
-                <div class="score-bar-wrap">
-                    <span>{composite:.1f}</span>
-                    <div class="score-bar-bg"><div class="score-bar-fill" style="width:{composite:.0f}%"></div></div>
-                </div>
-            </td>
-        </tr>
-        """
-    st.markdown(
-        f"""
-        <div class="panel">
-            <table class="custom-table">
-                <thead>
-                    <tr>
-                        <th>#</th><th>Model</th><th>Provider</th><th>Accuracy</th>
-                        <th>Hallucination Resistance</th><th>Instruction</th><th>Safety</th><th>Composite</th>
-                    </tr>
-                </thead>
-                <tbody>{rows_html}</tbody>
-            </table>
-        </div>
-        """,
-        unsafe_allow_html=True,
+    """Render the model leaderboard via st.dataframe with a color-coded score column.
+
+    Columns: Model, Provider, Avg Composite Score, Runs Count. Sorted by
+    Avg Composite Score descending (the sort is already applied by
+    ``get_leaderboard``).
+    """
+    if df.empty:
+        st.info("No evaluation runs yet.")
+        return
+
+    display_df = df[["model_name", "provider", "composite", "runs_count"]].rename(
+        columns={
+            "model_name": "Model",
+            "provider": "Provider",
+            "composite": "Avg Composite Score",
+            "runs_count": "Runs Count",
+        }
     )
+    styled = display_df.style.map(
+        _composite_score_style, subset=["Avg Composite Score"]
+    ).format({"Avg Composite Score": "{:.2f}"})
+    st.dataframe(styled, width="stretch", hide_index=True)
+
 
 
 def render_recent_runs(df: pd.DataFrame) -> None:
-    """Render the recent evaluation runs as a styled HTML table."""
-    rows_html = ""
-    for _, row in df.iterrows():
-        status = str(row["status"])
-        color, bg = STATUS_COLORS.get(status, ("#94a3b8", "rgba(148,163,184,0.12)"))
-        started = row["started_at"]
-        started_str = started.strftime("%b %d, %H:%M") if hasattr(started, "strftime") else str(started)
-        rows_html += f"""
-        <tr>
-            <td>{html.escape(str(row['run_id']))}</td>
-            <td>{html.escape(str(row['model_name']))}</td>
-            <td>{html.escape(str(row['suite']))}</td>
-            <td><span class="status-badge" style="color:{color}; background:{bg};">{html.escape(status)}</span></td>
-            <td>{started_str}</td>
-            <td>{int(row['duration_sec'])}s</td>
-            <td>{int(row['samples'])}</td>
-        </tr>
-        """
-    st.markdown(
-        f"""
-        <div class="panel">
-            <table class="custom-table">
-                <thead>
-                    <tr>
-                        <th>Run ID</th><th>Model</th><th>Suite</th><th>Status</th>
-                        <th>Started</th><th>Duration</th><th>Samples</th>
-                    </tr>
-                </thead>
-                <tbody>{rows_html}</tbody>
-            </table>
-        </div>
-        """,
-        unsafe_allow_html=True,
+    """Render the 5 most recent evaluation runs via st.dataframe.
+
+    Columns: Run ID (short), Model, Started, Composite Score, Status. The
+    Status column is color-coded to match the platform's status palette.
+    """
+    if df.empty:
+        st.info("No evaluation runs yet.")
+        return
+
+    display_df = pd.DataFrame(
+        {
+            "Run ID": df["run_id"].astype(str).str.slice(0, 8),
+            "Model": df["model_name"],
+            "Started": df["started_at"].apply(
+                lambda ts: ts.strftime("%b %d, %H:%M") if hasattr(ts, "strftime") else "—"
+            ),
+            "Composite Score": df["composite_score"].apply(
+                lambda v: f"{v:.1f}" if pd.notna(v) else "—"
+            ),
+            "Status": df["status"].astype(str).str.capitalize(),
+        }
     )
+
+    def _status_style(value: str) -> str:
+        color, bg = STATUS_COLORS.get(str(value).lower(), ("#94a3b8", "rgba(148,163,184,0.12)"))
+        return f"color: {color}; background-color: {bg}; font-weight: 600;"
+
+    styled = display_df.style.map(_status_style, subset=["Status"])
+    st.dataframe(styled, width="stretch", hide_index=True)
 
 
 def main() -> None:
@@ -269,10 +595,15 @@ def main() -> None:
     st.title("LLM Reliability Dashboard")
     st.caption("Live overview of model evaluation performance, regressions, and run history.")
 
+    metrics = get_summary_metrics()
+    if metrics.total_runs == 0:
+        st.info("No evaluations yet. Go to the Evaluation page to run your first benchmark.")
+        return
+
     render_regression_alert(get_regression_alert())
 
     st.markdown('<div class="section-title">Overview</div>', unsafe_allow_html=True)
-    render_metric_cards(get_summary_metrics())
+    render_metric_cards(metrics)
 
     leaderboard_df = get_leaderboard()
 
@@ -282,8 +613,12 @@ def main() -> None:
     col_radar, col_bar = st.columns(2)
     with col_radar:
         st.markdown('<div class="section-title">Dimension Comparison</div>', unsafe_allow_html=True)
-        fig_radar = radar_chart(get_radar_data(), title="Top 3 Models — 5 Dimensions")
-        st.plotly_chart(fig_radar, width="stretch")
+        radar_df = get_radar_data()
+        if not radar_df.empty:
+            fig_radar = radar_chart(radar_df, title="Top 3 Models — 4 Dimensions")
+            st.plotly_chart(fig_radar, width="stretch")
+        else:
+            st.info("Not enough data yet for a dimension comparison.")
     with col_bar:
         st.markdown('<div class="section-title">Composite Ranking</div>', unsafe_allow_html=True)
         fig_bar = leaderboard_bar_chart(leaderboard_df, title="Composite Score by Model")
