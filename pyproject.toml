@@ -2,6 +2,9 @@
 pythonpath = ["."]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+filterwarnings = [
+    "ignore::pydantic.warnings.PydanticDeprecatedSince20",
+]
 
 [tool.mypy]
 python_version = "3.12"
