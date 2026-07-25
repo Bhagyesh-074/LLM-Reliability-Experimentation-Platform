@@ -4,13 +4,15 @@ Evaluation orchestrator for a single evaluation run.
 
 ``EvaluationOrchestrator`` wires together the Prompt Registry, the
 Benchmark Registry, the Provider layer, the metric engine (six scorers +
-composite), and the persistence layer to execute one evaluation run end
-to end: resolve the prompt version and dataset rows named by an
-``EvaluationConfig``, build a request per row, call the configured
-provider, score each response with every metric, classify any
+composite), the MLflow tracker, and the persistence layer to execute one
+evaluation run end to end: resolve the prompt version and dataset rows
+named by an ``EvaluationConfig``, build a request per row, call the
+configured provider, score each response with every metric, classify any
 threshold-triggered failures (see ``_detect_failures``), aggregate a
-composite score, and persist the run, its per-row results, its failure
-classifications, and its aggregate metrics.
+composite score, mirror the run's config/metrics/status to MLflow (see
+``core.evaluation.mlflow_tracker.MLflowTracker``), and persist the run,
+its per-row results, its failure classifications, its aggregate metrics,
+and its MLflow run link.
 
 Pipeline (SYSTEM_DESIGN.md "Evaluation Pipeline"):
     Dataset -> Prompt Resolution -> Request Builder -> Provider ->
@@ -39,6 +41,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from core.evaluation.config import EvaluationConfig
+from core.evaluation.mlflow_tracker import MLflowTracker, build_experiment_name
 from core.evaluation.persistence import EvaluationPersistenceService
 from core.evaluation.request_builder import MissingTemplateVariableError, RequestBuilder
 from metrics.base import Metric, MetricResult
@@ -215,6 +218,7 @@ class EvaluationOrchestrator:
         composite_scorer: Optional[CompositeScorer] = None,
         persistence: Optional[EvaluationPersistenceService] = None,
         progress_callback: Optional[ProgressCallback] = None,
+        mlflow_tracker: Optional[MLflowTracker] = None,
     ) -> None:
         """Initialize the orchestrator for one evaluation run.
 
@@ -245,6 +249,14 @@ class EvaluationOrchestrator:
                 finishes, with a ``{"current", "total", "status"}`` dict.
                 Exceptions raised by the callback are swallowed so a faulty
                 UI hook cannot abort a run.
+            mlflow_tracker: Optional pre-built ``MLflowTracker``. Injecting
+                this lets tests assert on tracking calls without touching
+                a real MLflow backend. Defaults to a new instance reading
+                its tracking URI from ``configs/default.yaml``. MLflow
+                tracking is observability, not critical path: if it's
+                unreachable or misconfigured, the tracker degrades to a
+                no-op internally and this run proceeds untracked rather
+                than failing (see ``MLflowTracker``).
         """
         self.config = config
         self.session = session
@@ -255,6 +267,7 @@ class EvaluationOrchestrator:
         self.composite_scorer = composite_scorer or CompositeScorer()
         self.persistence = persistence or EvaluationPersistenceService(session)
         self.progress_callback = progress_callback
+        self.mlflow_tracker = mlflow_tracker or MLflowTracker()
         self.request_builder = RequestBuilder(config)
 
         # Resolved once, here, rather than lazily inside run(): the two
@@ -266,6 +279,15 @@ class EvaluationOrchestrator:
 
     async def run(self) -> EvaluationRun:
         """Execute the evaluation run end to end.
+
+        Also drives this run's MLflow lifecycle via ``self.mlflow_tracker``:
+        starts a run (in experiment ``"llm-eval-{benchmark_name}"``) and
+        logs ``self.config`` as params before any row executes, logs the
+        aggregate metric averages and composite score once every row is
+        scored, and ends the MLflow run with a status mapped from this
+        run's own ``status``. If tracking failed to start, every one of
+        these calls is a no-op (see ``MLflowTracker``) and this run
+        proceeds exactly as it would with tracking disabled.
 
         Returns:
             An ``EvaluationRun`` DTO carrying the persisted ``run_id``,
@@ -292,12 +314,21 @@ class EvaluationOrchestrator:
             self.config.dataset_version_id,
         )
 
-        # Setup-phase resolution: any failure here is fatal and propagates.
-        # Scorers are not resolved here -- they were already built once in
-        # __init__ and live on self._scorers.
-        prompt_version = self._load_prompt_version()
-        rows = self._load_dataset_rows()
-        provider = self._get_provider()
+        experiment_name = build_experiment_name(self.config)
+        run_name = f"{self.config.model_name}-{started_at.strftime('%Y%m%dT%H%M%S')}"
+        mlflow_run_id = self.mlflow_tracker.start_run(experiment_name, run_name)
+        self.mlflow_tracker.log_params(self.config)
+
+        try:
+            # Setup-phase resolution: any failure here is fatal and
+            # propagates. Scorers are not resolved here -- they were
+            # already built once in __init__ and live on self._scorers.
+            prompt_version = self._load_prompt_version()
+            rows = self._load_dataset_rows()
+            provider = self._get_provider()
+        except Exception:  # noqa: BLE001 - end the MLflow run cleanly before re-raising
+            self.mlflow_tracker.end_run("failed")
+            raise
 
         total = len(rows)
         self._emit_progress(current=0, total=total, status="started")
@@ -317,6 +348,9 @@ class EvaluationOrchestrator:
         metric_averages = self._aggregate_metric_averages(results)
         run_composite = self._aggregate_composite(results)
 
+        self.mlflow_tracker.log_metrics(metric_averages, composite_score=run_composite)
+        self.mlflow_tracker.end_run(status)
+
         run = EvaluationRun(
             run_id=str(uuid4()),  # placeholder; replaced by the persisted id below
             config=self.config,
@@ -330,6 +364,11 @@ class EvaluationOrchestrator:
 
         run_id = self._persist(run)
         run = run.model_copy(update={"run_id": run_id})
+
+        if mlflow_run_id is not None:
+            self.persistence.save_mlflow_run(
+                run_id=run_id, mlflow_run_id=mlflow_run_id, experiment_name=experiment_name
+            )
 
         logger.info(
             "Finished evaluation run %s: %d row(s), status=%s (%d failed), composite=%s",

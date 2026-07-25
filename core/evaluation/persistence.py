@@ -7,7 +7,9 @@ Persistence service for completed evaluation runs.
 rows in ``database.models``. It translates the DTO into an
 ``EvaluationRun`` row, its child ``EvaluationResult`` rows, and its 1:1
 ``RunMetrics`` row, delegating the actual writes to
-``EvaluationRepository``.
+``EvaluationRepository``. It also links the run to its external MLflow
+tracking run via a ``MlflowRun`` row, when ``MLflowTracker.start_run``
+succeeded (see ``save_mlflow_run``).
 
 The orchestrator is deliberately kept ignorant of ORM column names and
 FK wiring: it hands over a DTO and per-row results and gets back a
@@ -23,7 +25,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from database.models import EvaluationRun as EvaluationRunModel
-from database.models import Provider
+from database.models import MlflowRun, Provider
 from database.repositories.evaluation_repository import EvaluationRepository
 
 if TYPE_CHECKING:  # avoid a runtime import cycle with the orchestrator
@@ -197,6 +199,46 @@ class EvaluationPersistenceService:
             return
         self.repository.set_metrics(run_id, **columns)
         logger.info("Persisted aggregate metrics for run %s: %s", run_id, columns)
+
+    def save_mlflow_run(
+        self,
+        run_id: str,
+        mlflow_run_id: str,
+        experiment_name: Optional[str] = None,
+        artifact_path: Optional[str] = None,
+    ) -> None:
+        """Persist the 1:many link between a run and its MLflow tracking run.
+
+        Written directly against ``self.session`` (rather than through
+        ``EvaluationRepository``) for the same reason
+        ``_resolve_provider_id`` is: this is a small, self-contained
+        write with no per-row fan-out, so a dedicated repository method
+        would just forward the same three arguments.
+
+        Called by the orchestrator only when ``MLflowTracker.start_run``
+        actually returned an id -- MLflow tracking is best-effort, so a
+        run with no ``mlflow_run_id`` (tracking failed or was disabled)
+        simply has no row here rather than one with a placeholder id.
+
+        Args:
+            run_id: The persisted parent ``EvaluationRun.run_id``.
+            mlflow_run_id: MLflow's own run identifier, as returned by
+                ``MLflowTracker.start_run``. This is the row's primary
+                key, so it must be unique across all runs.
+            experiment_name: The MLflow experiment this run was logged
+                under (e.g. ``"llm-eval-{benchmark_name}"``), if known.
+            artifact_path: Where this run's artifacts were logged, if any
+                were logged via ``MLflowTracker.log_artifact``.
+        """
+        mlflow_run = MlflowRun(
+            mlflow_run_id=mlflow_run_id,
+            run_id=run_id,
+            experiment_name=experiment_name,
+            artifact_path=artifact_path,
+        )
+        self.session.add(mlflow_run)
+        self.session.flush()
+        logger.info("Linked MLflow run %s to evaluation run %s", mlflow_run_id, run_id)
 
     def _resolve_provider_id(self, provider_name: str) -> str:
         """Resolve a provider name to its ``providers.provider_id`` FK,

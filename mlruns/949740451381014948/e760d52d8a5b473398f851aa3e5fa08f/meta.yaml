@@ -1,0 +1,15 @@
+artifact_uri: file:C:/Users/Bhagy/OneDrive/Desktop/project_1/LLM-Reliability-Experimentation-Platform/mlruns/949740451381014948/e760d52d8a5b473398f851aa3e5fa08f/artifacts
+end_time: 1784981198792
+entry_point_name: ''
+experiment_id: '949740451381014948'
+lifecycle_stage: active
+run_id: e760d52d8a5b473398f851aa3e5fa08f
+run_name: llama3:latest-20260725T120534
+run_uuid: e760d52d8a5b473398f851aa3e5fa08f
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1784981134845
+status: 3
+tags: []
+user_id: Bhagy
