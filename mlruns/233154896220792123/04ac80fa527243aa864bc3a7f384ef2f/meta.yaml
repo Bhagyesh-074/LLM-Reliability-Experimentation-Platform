@@ -1,0 +1,15 @@
+artifact_uri: /app/mlruns/233154896220792123/04ac80fa527243aa864bc3a7f384ef2f/artifacts
+end_time: 1784992564579
+entry_point_name: ''
+experiment_id: '233154896220792123'
+lifecycle_stage: active
+run_id: 04ac80fa527243aa864bc3a7f384ef2f
+run_name: gemini-2.0-flash-20260725T151602
+run_uuid: 04ac80fa527243aa864bc3a7f384ef2f
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1784992562938
+status: 4
+tags: []
+user_id: appuser

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Generator, Iterator
 
 from loguru import logger
@@ -26,11 +27,38 @@ from database.base import Base
 # `Base.metadata` before `create_all()` is called.
 from database import models  # noqa: F401  (import for side effects)
 
-DEFAULT_SQLITE_URL = "sqlite:///./llm_reliability_platform.db"
+DEFAULT_SQLITE_URL = "sqlite:///./data/llm_reliability_platform.db"
 
 DATABASE_URL: str = os.environ.get("DATABASE_URL", DEFAULT_SQLITE_URL)
 
 _is_sqlite = DATABASE_URL.startswith("sqlite")
+
+
+def _ensure_sqlite_dir_exists(database_url: str) -> None:
+    """
+    Create the parent directory of a SQLite database file if it does
+    not already exist.
+
+    SQLite will not create missing intermediate directories itself, so
+    if the configured path (e.g. ``./data/platform.db``, as mounted by
+    the Docker Compose ``./data:/app/data`` volume) doesn't exist yet
+    inside the container, connecting fails with
+    ``sqlite3.OperationalError: unable to open database file``. This
+    is a no-op for in-memory SQLite URLs and for non-SQLite backends.
+    """
+    if not database_url.startswith("sqlite"):
+        return
+    # Strip the "sqlite:///" (or "sqlite://") prefix to get the raw path.
+    raw_path = database_url.split("///", 1)[-1] if "///" in database_url else ""
+    if not raw_path or raw_path == ":memory:":
+        return
+    db_path = Path(raw_path)
+    parent_dir = db_path.parent
+    if parent_dir and str(parent_dir) not in ("", "."):
+        parent_dir.mkdir(parents=True, exist_ok=True)
+
+
+_ensure_sqlite_dir_exists(DATABASE_URL)
 
 _engine_kwargs: dict = {"echo": False, "future": True}
 if _is_sqlite:

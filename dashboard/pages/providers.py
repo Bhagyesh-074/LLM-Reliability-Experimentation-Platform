@@ -184,9 +184,18 @@ def render_provider_card(provider: Provider) -> None:
 
         action_col1, action_col2, _ = st.columns([1, 1, 3])
         with action_col1:
-            st.button("Test connection", key=f"test_{provider.name}", width="stretch")
+            st.button(
+                "Test connection",
+                key=f"test_{provider.name}",
+                use_container_width=True,
+            )
         with action_col2:
-            st.button("Save", key=f"save_{provider.name}", type="primary", width="stretch")
+            st.button(
+                "Save",
+                key=f"save_{provider.name}",
+                type="primary",
+                use_container_width=True,
+            )
 
 
 def main() -> None:

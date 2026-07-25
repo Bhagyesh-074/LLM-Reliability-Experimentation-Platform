@@ -417,7 +417,7 @@ def main() -> None:
         run_clicked = st.button(
             "▶ Run Evaluation",
             type="primary",
-            width="stretch",
+            use_container_width=True,
             disabled=config_selections is None or st.session_state[_RUNNING_KEY],
         )
 

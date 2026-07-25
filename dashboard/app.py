@@ -38,6 +38,7 @@ if str(_ROOT) not in sys.path:
 from core.config import settings  # noqa: E402  (after sys.path fix)
 from core.logger import setup_logging  # noqa: E402
 from dashboard.components.sidebar import render_sidebar  # noqa: E402
+from database.session import init_db  # noqa: E402
 
 # Must be the very first Streamlit command — module-level guarantees this.
 st.set_page_config(
@@ -74,7 +75,7 @@ _PAGE_MODULES: dict[str, str] = {
 
 @st.cache_resource
 def _bootstrap() -> None:
-    """Initialise logging and any other one-time platform setup.
+    """Initialise logging and the database schema (one-time platform setup).
 
     ``st.cache_resource`` ensures this runs only once for the lifetime of
     the Streamlit server process, not on every script re-run triggered by
@@ -84,6 +85,7 @@ def _bootstrap() -> None:
         None
     """
     setup_logging()
+    init_db()
 
 
 # ---------------------------------------------------------------------------

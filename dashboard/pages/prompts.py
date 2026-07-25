@@ -159,7 +159,7 @@ def render_version_history(service: PromptService, prompt: PromptResponse) -> No
             for v in history
         ]
     )
-    st.dataframe(history_df, width="stretch", hide_index=True)
+    st.dataframe(history_df, use_container_width=True, hide_index=True)
 
 
 def main() -> None:
@@ -192,7 +192,7 @@ def main() -> None:
         df = prompts_to_dataframe(filtered)
         st.dataframe(
             df,
-            width="stretch",
+            use_container_width=True,
             hide_index=True,
             column_config={
                 "Status": st.column_config.TextColumn("Status"),

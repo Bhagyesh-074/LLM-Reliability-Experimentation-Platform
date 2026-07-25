@@ -63,6 +63,19 @@ def _make_fake_exception_namespace() -> MagicMock:
     return ns
 
 
+class _FakeGenAIAPIError(Exception):
+    """Stand-in for ``google.genai.errors.APIError``.
+
+    The real ``APIError`` exposes the HTTP status via a ``code`` attribute
+    (not ``status_code``), which is what ``gemini_provider.py`` reads via
+    ``getattr(exc, "code", None)``.
+    """
+
+    def __init__(self, message: str = "error", code: int = 500) -> None:
+        super().__init__(message)
+        self.code = code
+
+
 @pytest.fixture
 def request_obj() -> LLMRequest:
     return LLMRequest(system_prompt="You are helpful.", user_prompt="Say hi.", temperature=0.5, max_tokens=64)
@@ -319,23 +332,26 @@ class TestAnthropicProvider:
 
 
 class TestGeminiProvider:
-    def _build_provider(self, monkeypatch: pytest.MonkeyPatch, model_instance: MagicMock) -> Any:
-        fake_google_exceptions = _make_fake_exception_namespace()
-        fake_google_exceptions.NotFound = fake_google_exceptions.NotFoundError
-        fake_google_exceptions.ResourceExhausted = fake_google_exceptions.RateLimitError
-        fake_google_exceptions.DeadlineExceeded = fake_google_exceptions.APITimeoutError
-        fake_google_exceptions.ServiceUnavailable = fake_google_exceptions.APIConnectionError
-        fake_google_exceptions.GoogleAPIError = type("GoogleAPIError", (_FakeAPIError,), {})
-        monkeypatch.setattr(gemini_provider_mod, "google_exceptions", fake_google_exceptions)
+    def _build_provider(self, monkeypatch: pytest.MonkeyPatch, client: MagicMock) -> Any:
+        # Current implementation imports `errors as genai_errors` and
+        # `types as genai_types` from `google.genai`, and instantiates
+        # `genai.Client(...)` (there is no module-level `google_exceptions`
+        # or `GenerativeModel` anymore).
+        fake_genai_errors = MagicMock()
+        fake_genai_errors.APIError = _FakeGenAIAPIError
+        monkeypatch.setattr(gemini_provider_mod, "genai_errors", fake_genai_errors)
+
+        fake_genai_types = MagicMock()
+        fake_genai_types.GenerateContentConfig = MagicMock(side_effect=lambda **kw: kw)
+        monkeypatch.setattr(gemini_provider_mod, "genai_types", fake_genai_types)
 
         fake_genai = MagicMock()
-        fake_genai.GenerativeModel = MagicMock(return_value=model_instance)
-        fake_genai.types.GenerationConfig = MagicMock(side_effect=lambda **kw: kw)
+        fake_genai.Client = MagicMock(return_value=client)
         monkeypatch.setattr(gemini_provider_mod, "genai", fake_genai)
 
         monkeypatch.setenv("GOOGLE_API_KEY", "test-key")
-        provider = gemini_provider_mod.GeminiProvider(model="gemini-1.5-pro")
-        return provider, fake_genai
+        provider = gemini_provider_mod.GeminiProvider(model="gemini-2.5-pro")
+        return provider, fake_genai_errors
 
     def _fake_result(self, text: str = "Hi from Gemini") -> MagicMock:
         result = MagicMock()
@@ -345,20 +361,21 @@ class TestGeminiProvider:
         candidate = MagicMock()
         candidate.finish_reason = "STOP"
         result.candidates = [candidate]
-        result.to_dict.return_value = {"raw": "gemini-response"}
+        result.model_dump.return_value = {"raw": "gemini-response"}
         return result
 
     def test_missing_api_key_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(gemini_provider_mod, "genai", MagicMock())
-        monkeypatch.setattr(gemini_provider_mod, "google_exceptions", MagicMock())
+        monkeypatch.setattr(gemini_provider_mod, "genai_errors", MagicMock())
+        monkeypatch.setattr(gemini_provider_mod, "genai_types", MagicMock())
         monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
         with pytest.raises(ProviderError):
-            gemini_provider_mod.GeminiProvider(model="gemini-1.5-pro")
+            gemini_provider_mod.GeminiProvider(model="gemini-2.5-pro")
 
     def test_generate_success(self, monkeypatch: pytest.MonkeyPatch, request_obj: LLMRequest) -> None:
-        model_instance = MagicMock()
-        model_instance.generate_content.return_value = self._fake_result()
-        provider, fake_genai = self._build_provider(monkeypatch, model_instance)
+        client = MagicMock()
+        client.models.generate_content.return_value = self._fake_result()
+        provider, _ = self._build_provider(monkeypatch, client)
 
         response = provider.generate(request_obj)
 
@@ -369,25 +386,26 @@ class TestGeminiProvider:
             "total_tokens": 9,
         }
         assert response.finish_reason == "STOP"
-        # A system prompt was provided, so a fresh model must be built with it.
-        fake_genai.GenerativeModel.assert_any_call(
-            model_name="gemini-1.5-pro", system_instruction="You are helpful."
-        )
+        client.models.generate_content.assert_called_once()
+        _, kwargs = client.models.generate_content.call_args
+        assert kwargs["model"] == "gemini-2.5-pro"
+        assert kwargs["contents"] == "Say hi."
+        # GenerateContentConfig is faked as a passthrough dict, so the
+        # system prompt used to build it is inspectable here.
+        assert kwargs["config"]["system_instruction"] == "You are helpful."
 
     def test_model_not_found_raises(self, monkeypatch: pytest.MonkeyPatch, request_obj: LLMRequest) -> None:
-        model_instance = MagicMock()
-        provider, _ = self._build_provider(monkeypatch, model_instance)
-        model_instance.generate_content.side_effect = gemini_provider_mod.google_exceptions.NotFound("nope")
+        client = MagicMock()
+        provider, fake_genai_errors = self._build_provider(monkeypatch, client)
+        client.models.generate_content.side_effect = fake_genai_errors.APIError("nope", code=404)
 
         with pytest.raises(ModelNotFoundError):
             provider.generate(request_obj)
 
     def test_rate_limited_raises(self, monkeypatch: pytest.MonkeyPatch, request_obj: LLMRequest) -> None:
-        model_instance = MagicMock()
-        provider, _ = self._build_provider(monkeypatch, model_instance)
-        model_instance.generate_content.side_effect = gemini_provider_mod.google_exceptions.ResourceExhausted(
-            "quota"
-        )
+        client = MagicMock()
+        provider, fake_genai_errors = self._build_provider(monkeypatch, client)
+        client.models.generate_content.side_effect = fake_genai_errors.APIError("quota", code=429)
 
         with pytest.raises(RateLimitedError):
             provider.generate(request_obj)
@@ -401,9 +419,17 @@ class TestGeminiProvider:
 class TestOllamaProvider:
     def _build_provider(self, monkeypatch: pytest.MonkeyPatch, client: MagicMock) -> Any:
         fake_ollama = MagicMock()
+        # The provider always builds its client via `ollama.Client(host=...)`
+        # (there's no "bare module as client" path), so `Client(...)` must
+        # return the configured `client` mock. Previously this set
+        # `fake_ollama.chat` instead, which the provider never touches -
+        # `ollama.Client(host=...)` returned a fresh, unconfigured MagicMock,
+        # so `self._client.chat(...)` produced a generic MagicMock rather
+        # than the dict fixed up on `client.chat.return_value`, and that
+        # MagicMock then failed LLMResponse's pydantic validation for
+        # `text`/`raw_metadata`.
+        fake_ollama.Client = MagicMock(return_value=client)
         monkeypatch.setattr(ollama_provider_mod, "ollama", fake_ollama)
-        # No host supplied -> provider uses the top-level `ollama` module as client.
-        fake_ollama.chat = client.chat
         return ollama_provider_mod.OllamaProvider(model="llama3.1")
 
     def test_generate_success(self, monkeypatch: pytest.MonkeyPatch, request_obj: LLMRequest) -> None:

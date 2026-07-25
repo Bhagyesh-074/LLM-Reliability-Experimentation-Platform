@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any, Optional
 
 from providers.base import (
@@ -36,20 +37,23 @@ class OllamaProvider(BaseLLMProvider):
 
         Args:
             model: The local model tag (e.g. "llama3.1", "mistral").
-            host: Optional Ollama daemon host URL. When omitted, the
-                client falls back to the SDK default
-                (typically http://localhost:11434).
+            host: Optional Ollama daemon host URL. When omitted, falls
+                back to the ``OLLAMA_HOST`` environment variable (set
+                in docker-compose.yml to the host machine's Ollama
+                daemon, e.g. http://host.docker.internal:11434), and
+                finally to http://localhost:11434 if neither is set.
 
         Raises:
             ImportError: If the ``ollama`` package is not installed.
         """
-        super().__init__(model, host=host, **kwargs)
+        resolved_host = host or os.environ.get("OLLAMA_HOST") or "http://localhost:11434"
+        super().__init__(model, host=resolved_host, **kwargs)
         if ollama is None:
             raise ImportError(
                 "The 'ollama' package is required to use OllamaProvider. "
                 "Install it with `pip install ollama`."
             )
-        self._client = ollama.Client(host=host) if host else ollama
+        self._client = ollama.Client(host=resolved_host)
 
     def generate(self, request: LLMRequest) -> LLMResponse:
         """Generate a response using the local Ollama daemon.

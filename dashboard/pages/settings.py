@@ -78,7 +78,7 @@ def main() -> None:
     st.write("")
     save_col, reset_col, _ = st.columns([1, 1, 3])
     with save_col:
-        if st.button("💾 Save settings", type="primary", width="stretch"):
+        if st.button("💾 Save settings", type="primary", use_container_width=True):
             st.session_state["settings"] = Settings(
                 mlflow_tracking_uri=mlflow_uri,
                 default_temperature=default_temperature,
@@ -86,7 +86,7 @@ def main() -> None:
             )
             st.success("Settings saved for this session.")
     with reset_col:
-        if st.button("↺ Reset to defaults", width="stretch"):
+        if st.button("↺ Reset to defaults", use_container_width=True):
             st.session_state["_reset_pending"] = True
             st.rerun()
 
@@ -108,4 +108,4 @@ def render() -> None:
 
 
 if __name__ == "__main__":
-    render()
+    render()    

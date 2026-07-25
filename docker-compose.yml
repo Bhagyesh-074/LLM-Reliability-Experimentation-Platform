@@ -1,0 +1,98 @@
+# ---------------------------------------------------------------------------
+# docker-compose.yml — LLM Reliability & Experimentation Platform
+# ---------------------------------------------------------------------------
+# One-command local deployment:
+#
+#   1. cp .env.example .env   # fill in whichever provider keys you have
+#   2. docker compose up --build
+#   3. open http://localhost:8501
+#
+# OLLAMA NOTE
+# -----------
+# This stack does NOT run Ollama as a container. Ollama is expected to be
+# running separately on the HOST machine (e.g. `ollama serve`, or the
+# desktop app), not inside this compose project. Reasons:
+#   - Ollama manages large local model weights better with direct host
+#     access (GPU passthrough, disk cache) than as a bind-mounted service.
+#   - Most users already run Ollama natively for other tools.
+#
+# For the "app" container to reach an Ollama instance running on the host:
+#   - Linux:         either add `extra_hosts` (already set below) so
+#                     `host.docker.internal` resolves, OR use
+#                     `network_mode: host` (commented alternative below)
+#                     and point the app at `http://localhost:11434`.
+#   - macOS/Windows:  Docker Desktop already resolves `host.docker.internal`
+#                     to the host automatically; the extra_hosts entry below
+#                     is a harmless no-op there but keeps behavior identical
+#                     across platforms.
+#
+# In your app config, point the Ollama provider's base URL at:
+#   http://host.docker.internal:11434
+# (set via configs/default.yaml or an LLM_PLATFORM__ env override — see
+# .env.example for the suggested variable name).
+# ---------------------------------------------------------------------------
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: llm-reliability-platform:latest
+    container_name: llm-reliability-platform
+    restart: unless-stopped
+
+    ports:
+      - "8501:8501"
+
+    volumes:
+      # Persist the SQLite database and any uploaded datasets across
+      # container restarts/rebuilds. Maps to DatabaseConfig.url
+      # ("sqlite:///./data/platform.db") in core/config.py.
+      - ./data:/app/data
+      # Persist MLflow tracking data + artifacts. Maps to
+      # MLflowConfig.tracking_uri ("./mlruns") in core/config.py.
+      - ./mlruns:/app/mlruns
+      # Optional: persist rotated log files (LoggingConfig.log_dir).
+      # Comment out if you'd rather logs stay ephemeral inside the container.
+      - ./logs:/app/logs
+
+    env_file:
+      # All variables are loaded from .env (copy .env.example -> .env
+      # and fill in the keys you actually have). Every provider key is
+      # optional: leave it blank/absent to simply not use that provider.
+      - .env
+
+    environment:
+      # Explicitly declared (in addition to env_file) so it's obvious at a
+      # glance which provider credentials this service expects. Values
+      # actually come from the .env file above; these just pass them
+      # through / document defaults.
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      # No key required for Ollama — only the base URL, so the app knows
+      # where to reach the host-installed Ollama server.
+      - LLM_PLATFORM__PROVIDERS__OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      # Read directly by providers/ollama_provider.py (via the `ollama`
+      # SDK's own OLLAMA_HOST convention) so the container never falls
+      # back to its own localhost:11434, which has no daemon running.
+      - OLLAMA_HOST=${OLLAMA_HOST:-http://host.docker.internal:11434}
+
+    # Lets the container resolve `host.docker.internal` to the Docker host
+    # on Linux too (Docker Desktop on macOS/Windows already provides this
+    # mapping natively; this line is a no-op there).
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+    # --- Alternative for Linux hosts, if you prefer not to rely on the
+    # extra_hosts mapping above: uncomment network_mode below (and remove
+    # the `ports` block, which is ignored under host networking), then set
+    # OLLAMA_BASE_URL=http://localhost:11434 in your .env.
+    # network_mode: host
+
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8501/_stcore/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s

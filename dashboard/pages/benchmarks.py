@@ -149,7 +149,7 @@ def render_upload_section(benchmarks: list[BenchmarkSummary]) -> None:
 
     if validation_result.is_valid:
         st.caption(f"Parsed {len(preview_df)} rows. Showing first 5 below.")
-        st.dataframe(preview_df.head(5), width="stretch", hide_index=True)
+        st.dataframe(preview_df.head(5), use_container_width=True, hide_index=True)
 
     register_col, _ = st.columns([1, 3])
     with register_col:
@@ -157,7 +157,7 @@ def render_upload_section(benchmarks: list[BenchmarkSummary]) -> None:
         if st.button(
             "Register benchmark",
             type="primary",
-            width="stretch",
+            use_container_width=True,
             disabled=register_disabled,
         ):
             uploaded.seek(0)
@@ -220,7 +220,7 @@ def main() -> None:
 
     st.dataframe(
         benchmarks_to_dataframe(filtered),
-        width="stretch",
+        use_container_width=True,
         hide_index=True,
     )
 

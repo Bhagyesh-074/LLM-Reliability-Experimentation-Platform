@@ -1,0 +1,66 @@
+# ---------------------------------------------------------------------------
+# .dockerignore — LLM Reliability & Experimentation Platform
+# ---------------------------------------------------------------------------
+# Keeps the build context small/fast and prevents secrets or local state
+# from ever being baked into an image layer.
+# ---------------------------------------------------------------------------
+
+# --- Version control ---
+.git
+.gitignore
+.gitattributes
+
+# --- Secrets / environment ---
+.env
+.env.*
+!.env.example
+
+# --- Persisted application state (mounted as volumes at runtime instead) ---
+data/
+mlruns/
+mlartifacts/
+logs/
+*.db
+*.sqlite
+*.sqlite3
+
+# --- Python artifacts ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# --- Virtual environments ---
+.venv/
+venv/
+env/
+ENV/
+
+# --- IDE / OS cruft ---
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# --- Docker itself ---
+Dockerfile
+docker-compose.yml
+docker-compose.override.yml
+.dockerignore
+
+# --- Docs / misc that don't affect the runtime image ---
+README.md
+CHANGELOG.md
+SYSTEM_DESIGN.md
+docs/
+notebooks/
+tests/

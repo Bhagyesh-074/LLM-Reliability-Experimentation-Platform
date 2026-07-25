@@ -611,7 +611,7 @@ def render_leaderboard(df: pd.DataFrame) -> None:
     styled = display_df.style.map(
         _composite_score_style, subset=["Avg Composite Score"]
     ).format({"Avg Composite Score": "{:.2f}"})
-    st.dataframe(styled, width="stretch", hide_index=True)
+    st.dataframe(styled, use_container_width=True, hide_index=True)
 
 
 
@@ -644,7 +644,7 @@ def render_recent_runs(df: pd.DataFrame) -> None:
         return f"color: {color}; background-color: {bg}; font-weight: 600;"
 
     styled = display_df.style.map(_status_style, subset=["Status"])
-    st.dataframe(styled, width="stretch", hide_index=True)
+    st.dataframe(styled, use_container_width=True, hide_index=True)
 
 
 def main() -> None:
@@ -673,13 +673,13 @@ def main() -> None:
         radar_df = get_radar_data()
         if not radar_df.empty:
             fig_radar = radar_chart(radar_df, title="Top 3 Models — 4 Dimensions")
-            st.plotly_chart(fig_radar, width="stretch")
+            st.plotly_chart(fig_radar, use_container_width=True)
         else:
             st.info("Not enough data yet for a dimension comparison.")
     with col_bar:
         st.markdown('<div class="section-title">Composite Ranking</div>', unsafe_allow_html=True)
         fig_bar = leaderboard_bar_chart(leaderboard_df, title="Composite Score by Model")
-        st.plotly_chart(fig_bar, width="stretch")
+        st.plotly_chart(fig_bar, use_container_width=True)
 
     st.markdown('<div class="section-title">Recent Evaluation Runs</div>', unsafe_allow_html=True)
     render_recent_runs(get_recent_runs())

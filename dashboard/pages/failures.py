@@ -259,7 +259,7 @@ def render_summary_table(filtered: list[FailureRecord]) -> None:
         ]
     )
     styler = df.style.applymap(_style_severity, subset=["Severity"])
-    st.dataframe(styler, width="stretch", hide_index=True)
+    st.dataframe(styler, use_container_width=True, hide_index=True)
 
 
 def render_row_detail(filtered: list[FailureRecord]) -> None:
@@ -314,7 +314,7 @@ def render_category_chart(filtered: list[FailureRecord]) -> None:
     counts.columns = ["Category", "Count"]
     fig = px.bar(counts, x="Category", y="Count", color="Category", title="Failures by category")
     fig.update_layout(showlegend=False)
-    st.plotly_chart(fig, width="stretch")
+    st.plotly_chart(fig, use_container_width=True)
 
 
 def main() -> None:

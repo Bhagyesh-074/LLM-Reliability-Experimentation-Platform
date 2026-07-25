@@ -178,7 +178,7 @@ def render_accuracy_trend_chart(df: pd.DataFrame) -> None:
         },
     )
     fig.update_layout(**_DARK_LAYOUT)
-    st.plotly_chart(fig, width="stretch")
+    st.plotly_chart(fig, use_container_width=True)
 
 
 def render_cost_chart(df: pd.DataFrame, metric_name: str) -> None:
@@ -204,7 +204,7 @@ def render_cost_chart(df: pd.DataFrame, metric_name: str) -> None:
         text_auto=".2f",
     )
     fig.update_layout(**_DARK_LAYOUT, showlegend=False)
-    st.plotly_chart(fig, width="stretch")
+    st.plotly_chart(fig, use_container_width=True)
 
 
 def render_latency_chart(df: pd.DataFrame) -> None:
@@ -223,7 +223,7 @@ def render_latency_chart(df: pd.DataFrame) -> None:
         text_auto=".0f",
     )
     fig.update_layout(**_DARK_LAYOUT, showlegend=False)
-    st.plotly_chart(fig, width="stretch")
+    st.plotly_chart(fig, use_container_width=True)
 
 
 def render_temperature_scatter(df: pd.DataFrame) -> None:
@@ -246,7 +246,7 @@ def render_temperature_scatter(df: pd.DataFrame) -> None:
         labels={"temperature": "Temperature", "accuracy": "Accuracy (%)", "model_name": "Model"},
     )
     fig.update_layout(**_DARK_LAYOUT)
-    st.plotly_chart(fig, width="stretch")
+    st.plotly_chart(fig, use_container_width=True)
 
 
 def main() -> None:
