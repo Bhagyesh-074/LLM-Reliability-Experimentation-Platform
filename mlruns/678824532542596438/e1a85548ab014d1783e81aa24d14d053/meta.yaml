@@ -1,0 +1,15 @@
+artifact_uri: file:C:/Users/Bhagy/OneDrive/Desktop/project_1/LLM-Reliability-Experimentation-Platform/mlruns/678824532542596438/e1a85548ab014d1783e81aa24d14d053/artifacts
+end_time: 1784983835929
+entry_point_name: ''
+experiment_id: '678824532542596438'
+lifecycle_stage: active
+run_id: e1a85548ab014d1783e81aa24d14d053
+run_name: gpt-4o-20260725T125035
+run_uuid: e1a85548ab014d1783e81aa24d14d053
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1784983835813
+status: 3
+tags: []
+user_id: Bhagy

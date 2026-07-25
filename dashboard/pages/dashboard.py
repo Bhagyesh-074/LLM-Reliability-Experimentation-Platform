@@ -20,6 +20,20 @@ from database.models import EvaluationRun, Provider, RunMetrics
 from database.repositories.evaluation_repository import EvaluationRepository
 from database.session import session_scope
 from dashboard.components.charts import leaderboard_bar_chart, radar_chart
+from stats_engine.regression import RegressionDetector
+
+# The regression threshold (in percent) is sourced from application
+# settings when a `config.settings` module exposing
+# `regression_threshold_pct` is available, so ops can tune sensitivity
+# without a code change. Falls back to 10.0 if settings aren't wired up.
+try:
+    from config.settings import settings as _settings
+
+    DEFAULT_REGRESSION_THRESHOLD_PCT: float = float(
+        getattr(_settings, "regression_threshold_pct", 10.0)
+    )
+except ImportError:
+    DEFAULT_REGRESSION_THRESHOLD_PCT = 10.0
 
 STATUS_COLORS: Dict[str, Tuple[str, str]] = {
     "passed": ("#22c55e", "rgba(34,197,94,0.12)"),
@@ -75,6 +89,20 @@ p, span, label { color: #cbd5e1; }
 .alert-icon { font-size: 1.3rem; line-height: 1.4; }
 .alert-title { color: #fecaca; font-weight: 700; font-size: 0.95rem; }
 .alert-message { color: #fca5a5; font-size: 0.86rem; margin-top: 2px; }
+
+.alert-banner-warning {
+    background: linear-gradient(90deg, rgba(245,158,11,0.16) 0%, rgba(245,158,11,0.05) 100%);
+    border: 1px solid rgba(245,158,11,0.45);
+    border-left: 4px solid #f59e0b;
+    border-radius: 10px;
+    padding: 14px 18px;
+    margin-bottom: 1.25rem;
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+}
+.alert-banner-warning .alert-title { color: #fde68a; font-weight: 700; font-size: 0.95rem; }
+.alert-banner-warning .alert-message { color: #fcd34d; font-size: 0.86rem; margin-top: 2px; }
 
 .panel {
     background: #121a2e;
@@ -155,12 +183,19 @@ class SummaryMetrics:
 
 @dataclass(frozen=True)
 class RegressionAlert:
-    """Result of comparing each model's latest run against its previous one."""
+    """A single model's regression finding, as reported by RegressionDetector.
 
-    detected: bool
-    model_name: Optional[str] = None
-    metric: Optional[str] = None
-    message: Optional[str] = None
+    One instance is produced per model whose latest run regressed against
+    its immediately preceding run. Multiple instances may coexist when
+    more than one model regressed in the same evaluation cycle.
+    """
+
+    model_name: str
+    severity: str
+    pct_change: float
+    baseline_score: float
+    current_score: float
+    message: str
 
 
 # --------------------------------------------------------------------------
@@ -410,13 +445,21 @@ def get_recent_runs() -> pd.DataFrame:
     )
 
 
-def get_regression_alert() -> RegressionAlert:
-    """Detect a composite-score regression by comparing each model's two most recent runs.
+def get_regression_alerts() -> List[RegressionAlert]:
+    """Detect composite-score regressions by comparing each model's two most recent runs.
 
-    A model has regressed if its latest run's ``composite_score`` dropped
-    by more than 10% relative to its immediately preceding run. When
-    several models have regressed, the one with the largest percentage
-    drop is reported.
+    For every model with at least two runs, the current run's
+    ``composite_score`` is compared against the immediately preceding
+    (baseline) run's ``composite_score`` via
+    :meth:`RegressionDetector.detect`, using
+    :data:`DEFAULT_REGRESSION_THRESHOLD_PCT` as the threshold. Any model
+    whose result is flagged as a regression (``major`` or ``minor``
+    severity) contributes one :class:`RegressionAlert` to the returned
+    list, so multiple simultaneous regressions are all reported.
+
+    Returns:
+        A list of alerts, one per regressed model. Empty if no model
+        regressed or if fewer than two runs exist for every model.
     """
     with session_scope() as session:
         stmt = (
@@ -431,36 +474,39 @@ def get_regression_alert() -> RegressionAlert:
     for model_name, composite_score, _started_at in rows:
         runs_by_model.setdefault(model_name, []).append(float(composite_score))
 
-    worst_drop_pct = 0.0
-    worst_model: Optional[str] = None
-    worst_old: Optional[float] = None
-    worst_new: Optional[float] = None
+    detector = RegressionDetector()
+    alerts: List[RegressionAlert] = []
 
     for model_name, scores in runs_by_model.items():
         if len(scores) < 2:
+            # Need a current run and a prior baseline run to compare.
             continue
-        newest_score, previous_score = scores[0], scores[1]
-        if previous_score <= 0:
+        current_score, baseline_score = scores[0], scores[1]
+
+        result = detector.detect(
+            current_score=current_score,
+            baseline_score=baseline_score,
+            threshold_pct=DEFAULT_REGRESSION_THRESHOLD_PCT,
+        )
+
+        if not result.is_regression or result.severity not in ("major", "minor"):
             continue
-        drop_pct = (previous_score - newest_score) / previous_score * 100.0
-        if drop_pct > 10.0 and drop_pct > worst_drop_pct:
-            worst_drop_pct = drop_pct
-            worst_model = model_name
-            worst_old = previous_score
-            worst_new = newest_score
 
-    if worst_model is None:
-        return RegressionAlert(detected=False)
+        alerts.append(
+            RegressionAlert(
+                model_name=model_name,
+                severity=result.severity,
+                pct_change=result.pct_change,
+                baseline_score=baseline_score,
+                current_score=current_score,
+                message=(
+                    f"Regression detected: {model_name} dropped {result.pct_change:.1f}% "
+                    f"(from {baseline_score:.1f} to {current_score:.1f})"
+                ),
+            )
+        )
 
-    return RegressionAlert(
-        detected=True,
-        model_name=worst_model,
-        metric="composite_score",
-        message=(
-            f"Regression detected: {worst_model} dropped from "
-            f"{worst_old:.1f} to {worst_new:.1f} ({worst_drop_pct:.0f}% drop)."
-        ),
-    )
+    return alerts
 
 
 # --------------------------------------------------------------------------
@@ -468,26 +514,37 @@ def get_regression_alert() -> RegressionAlert:
 # --------------------------------------------------------------------------
 
 
-def render_regression_alert(alert: RegressionAlert) -> None:
-    """Render a red banner if a regression has been detected, else a subtle note."""
-    if not alert.detected:
+def render_regression_alerts(alerts: List[RegressionAlert]) -> None:
+    """Render one banner per regressed model, or a green note if none regressed.
+
+    Major-severity regressions render in the existing red ``alert-banner``
+    style; minor-severity regressions render in the ``alert-banner-warning``
+    (yellow) style. Multiple banners are rendered when multiple models
+    have regressed simultaneously.
+    """
+    if not alerts:
         st.caption("✅ No regressions detected across the latest evaluation runs.")
         return
-    model = html.escape(alert.model_name or "Unknown model")
-    metric = html.escape(alert.metric or "Unknown metric")
-    message = html.escape(alert.message or "A regression was detected.")
-    st.markdown(
-        f"""
-        <div class="alert-banner">
-            <div class="alert-icon">🚨</div>
-            <div>
-                <div class="alert-title">Regression Alert — {model} · {metric}</div>
-                <div class="alert-message">{message}</div>
+
+    for alert in alerts:
+        model = html.escape(alert.model_name)
+        message = html.escape(alert.message)
+        if alert.severity == "major":
+            banner_class, icon, title = "alert-banner", "🚨", f"Regression Alert — {model} · composite_score"
+        else:
+            banner_class, icon, title = "alert-banner-warning", "⚠️", f"Minor Regression — {model} · composite_score"
+        st.markdown(
+            f"""
+            <div class="{banner_class}">
+                <div class="alert-icon">{icon}</div>
+                <div>
+                    <div class="alert-title">{title}</div>
+                    <div class="alert-message">{message}</div>
+                </div>
             </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+            """,
+            unsafe_allow_html=True,
+        )
 
 
 def render_metric_cards(metrics: SummaryMetrics) -> None:
@@ -600,7 +657,7 @@ def main() -> None:
         st.info("No evaluations yet. Go to the Evaluation page to run your first benchmark.")
         return
 
-    render_regression_alert(get_regression_alert())
+    render_regression_alerts(get_regression_alerts())
 
     st.markdown('<div class="section-title">Overview</div>', unsafe_allow_html=True)
     render_metric_cards(metrics)
